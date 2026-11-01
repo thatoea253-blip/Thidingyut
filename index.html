@@ -62,6 +62,8 @@
       color: var(--text-ivory);
       font-family: var(--font-letter);
       overflow: hidden;
+      touch-action: none;
+      overscroll-behavior: none;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
@@ -101,6 +103,9 @@
       overflow: hidden;
       isolation: isolate;
       background: #08060C;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
     }
 
     @media (min-width: 640px) {
@@ -2568,22 +2573,21 @@
       setTimeout(resizeCanvas, 350);
     });
 
-    // Wheel / Trackpad Scroll Gesture to Change Letter or Wish
+    /*Wheel / Trackpad Two-Finger Swipe & Scroll Gesture to Change Letter or Wish */
     let lastWheelStepTime = 0;
     let wheelDeltaAccum = 0;
-    phoneViewport.addEventListener(
+    window.addEventListener(
       "wheel",
       (e) => {
         e.preventDefault();
         const now = performance.now();
-        if (now - lastWheelStepTime < 500) {
-          wheelDeltaAccum = 0;
+        if (now - lastWheelStepTime < 420) {
           return;
         }
         const primaryDelta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
         wheelDeltaAccum += primaryDelta;
 
-        if (Math.abs(wheelDeltaAccum) >= 24) {
+        if (Math.abs(wheelDeltaAccum) >= 15) {
           const dir = wheelDeltaAccum > 0 ? 1 : -1;
           wheelDeltaAccum = 0;
           lastWheelStepTime = now;
@@ -2593,97 +2597,133 @@
       { passive: false }
     );
 
-    // Unified Pointer Swipe / Drag & Sky Tap Gesture across Viewport & Cards
-    let pointerActive = false;
-    let pointerStartX = 0;
-    let pointerStartY = 0;
-    let pointerStartedInCard = false;
+    // Prevent native HTML5 drag-and-drop from hijacking mouse/touch swipes
+    window.addEventListener("dragstart", (e) => e.preventDefault());
+
+    // Unified Pointer & Touch Swipe / Drag & Sky Tap Gesture across Viewport & Cards
+    let gestureActive = false;
+    let gesturePointerId = null;
+    let gestureStartX = 0;
+    let gestureStartY = 0;
+    let gestureCurrentX = 0;
+    let gestureCurrentY = 0;
+    let gestureStartedInCard = false;
+    let lastGestureTriggerTime = 0;
 
     function getActiveCardContentWrap() {
       return activeTab === "letters" ? letterContentWrap : lanternContentWrap;
     }
 
-    function resetCardDragTransform() {
+    function applyCardDragTransform(dx, dy) {
+      const dampedX = Math.max(-36, Math.min(36, dx * 0.28));
+      const dampedY = Math.max(-12, Math.min(12, dy * 0.12));
+      const transformStr = `translate3d(${dampedX.toFixed(1)}px, ${dampedY.toFixed(1)}px, 0)`;
+
       const wrap = getActiveCardContentWrap();
-      if (!wrap) return;
-      wrap.classList.remove("is-dragging");
-      wrap.style.transform = "";
+      if (wrap) {
+        wrap.classList.add("is-dragging");
+        wrap.style.transform = transformStr;
+      }
+      if (isFirstTimeGuideActive && skyCotlOnboardingOverlay) {
+        skyCotlOnboardingOverlay.style.transition = "none";
+        skyCotlOnboardingOverlay.style.transform = transformStr;
+      }
     }
 
-    phoneViewport.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("header, nav, #igniteLanternBtn, .kanote-dot")) return;
-      pointerActive = true;
-      pointerStartX = e.clientX;
-      pointerStartY = e.clientY;
-      pointerStartedInCard = Boolean(e.target.closest("#letterCard, #lanternCard"));
-
-      if (pointerStartedInCard) {
-        const wrap = getActiveCardContentWrap();
-        if (wrap) wrap.classList.add("is-dragging");
-      }
-    });
-
-    phoneViewport.addEventListener("pointermove", (e) => {
-      if (!pointerActive || !pointerStartedInCard) return;
-      const dx = e.clientX - pointerStartX;
-      const dy = e.clientY - pointerStartY;
+    function resetCardDragTransform() {
       const wrap = getActiveCardContentWrap();
-      if (!wrap) return;
+      if (wrap) {
+        wrap.classList.remove("is-dragging");
+        wrap.style.transform = "";
+      }
+      if (skyCotlOnboardingOverlay) {
+        skyCotlOnboardingOverlay.style.transition = "";
+        skyCotlOnboardingOverlay.style.transform = "";
+      }
+    }
 
-      const dampedX = Math.max(-28, Math.min(28, dx * 0.24));
-      const dampedY = Math.max(-10, Math.min(10, dy * 0.10));
-      wrap.style.transform = `translate3d(${dampedX.toFixed(1)}px, ${dampedY.toFixed(1)}px, 0)`;
-    });
+    function startSwipeGesture(clientX, clientY, target, pointerId = null) {
+      if (target && target.closest("header, nav, #igniteLanternBtn, .kanote-dot, #bezelToggleBtn")) {
+        return false;
+      }
+      gestureActive = true;
+      gesturePointerId = pointerId;
+      gestureStartX = clientX;
+      gestureStartY = clientY;
+      gestureCurrentX = clientX;
+      gestureCurrentY = clientY;
+      gestureStartedInCard = Boolean(
+        isFirstTimeGuideActive ||
+        (target && target.closest("#letterCard, #lanternCard, #skyCotlOnboardingOverlay"))
+      );
+      return true;
+    }
 
-    phoneViewport.addEventListener("pointercancel", () => {
-      pointerActive = false;
+    function moveSwipeGesture(clientX, clientY) {
+      if (!gestureActive) return;
+      gestureCurrentX = clientX;
+      gestureCurrentY = clientY;
+      const dx = gestureCurrentX - gestureStartX;
+      const dy = gestureCurrentY - gestureStartY;
+      applyCardDragTransform(dx, dy);
+    }
+
+    function finishSwipeGesture(clientX, clientY, target, isCancel = false) {
+      if (!gestureActive) return;
+      gestureActive = false;
+      gesturePointerId = null;
       resetCardDragTransform();
-    });
 
-    phoneViewport.addEventListener("pointerup", (e) => {
-      if (!pointerActive) return;
-      pointerActive = false;
-      resetCardDragTransform();
-
-      const dx = e.clientX - pointerStartX;
-      const dy = e.clientY - pointerStartY;
+      const endX = typeof clientX === "number" ? clientX : gestureCurrentX;
+      const endY = typeof clientY === "number" ? clientY : gestureCurrentY;
+      const dx = endX - gestureStartX;
+      const dy = endY - gestureStartY;
       const absX = Math.abs(dx);
       const absY = Math.abs(dy);
 
-      // Horizontal Swipe (Both Left & Right) -> Swipe Left: Next (+1) | Swipe Right: Previous (-1)
-      if (absX > 28 && absX >= absY * 0.75) {
+      const now = performance.now();
+      if (now - lastGestureTriggerTime < 120) return;
+
+      // 1. Horizontal Swipe (Both Left & Right) -> Swipe Left (dx < 0): Next (+1) | Swipe Right (dx > 0): Previous (-1)
+      if (absX >= 18 && absX >= absY * 0.6) {
+        lastGestureTriggerTime = now;
         const dir = dx < 0 ? 1 : -1;
         stepActiveScene(dir);
         return;
       }
 
-      // Vertical Swipe / Scroll Drag on Card -> Swipe Up: Next (+1) | Swipe Down: Previous (-1)
-      if (pointerStartedInCard && absY > 34 && absY > absX) {
+      // 2. Vertical Swipe / Scroll Drag -> Swipe Up (dy < 0): Next (+1) | Swipe Down (dy > 0): Previous (-1)
+      if (gestureStartedInCard && absY >= 24 && absY > absX) {
+        lastGestureTriggerTime = now;
         const dir = dy < 0 ? 1 : -1;
         stepActiveScene(dir);
         return;
       }
 
-      // If First-Time Guide Overlay is active and user taps anywhere -> Dismiss Guide to reveal Letter 1
+      if (isCancel) return;
+
+      // 3. If First-Time Guide Overlay is active and user taps -> Dismiss Guide to reveal Letter 1
       if (isFirstTimeGuideActive && absX < 14 && absY < 14) {
+        lastGestureTriggerTime = now;
         dismissFirstTimeGuide();
         return;
       }
 
-      // Gentle Tap on Letter Card or Wish Text -> Advance to Next Letter/Wish
-      if (pointerStartedInCard && absX < 12 && absY < 12) {
-        if (activeTab === "letters" || e.target.closest("#wishCycleArea")) {
+      // 4. Gentle Tap on Letter Card or Wish Text -> Advance to Next Letter/Wish
+      if (gestureStartedInCard && absX < 12 && absY < 12) {
+        if (activeTab === "letters" || (target && target.closest("#wishCycleArea"))) {
+          lastGestureTriggerTime = now;
           stepActiveScene(1);
         }
         return;
       }
 
-      // Sky Tap Interactions (when tapping outside the cards)
-      if (pointerStartedInCard) return;
+      // 5. Sky Tap Interactions (when tapping outside the cards)
+      if (gestureStartedInCard) return;
 
       const rect = phoneViewport.getBoundingClientRect();
-      const localX = e.clientX - rect.left;
-      const localY = e.clientY - rect.top;
+      const localX = endX - rect.left;
+      const localY = endY - rect.top;
 
       // In Sky Lantern Tab: Tapping the Hero Lantern directly ignites & releases it
       if (activeTab === "lantern" && heroLantern.state === "idle") {
@@ -2718,7 +2758,67 @@
       spawnBackgroundLanterns(1, localX, localY, randomWish.inscribedSub);
       spawnFlameEmbers(localX, localY, 7);
       showSkyWishWhisper(localX, localY, `${randomWish.inscribedTitle} — ${randomWish.inscribedSub}`);
+    }
+
+    // Pointer Events (Mouse + Pen + Modern Touch)
+    window.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      startSwipeGesture(e.clientX, e.clientY, e.target, e.pointerId);
     });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!gestureActive) return;
+      if (gesturePointerId !== null && e.pointerId !== gesturePointerId) return;
+      moveSwipeGesture(e.clientX, e.clientY);
+    });
+
+    window.addEventListener("pointerup", (e) => {
+      if (!gestureActive) return;
+      if (gesturePointerId !== null && e.pointerId !== gesturePointerId) return;
+      finishSwipeGesture(e.clientX, e.clientY, e.target, false);
+    });
+
+    window.addEventListener("pointercancel", (e) => {
+      if (!gestureActive) return;
+      if (gesturePointerId !== null && e.pointerId !== gesturePointerId) return;
+      finishSwipeGesture(gestureCurrentX, gestureCurrentY, e.target, true);
+    });
+
+    // Direct Touch Events Fallback (Ensures 100% reliability on all mobile browsers & WebViews)
+    window.addEventListener(
+      "touchstart",
+      (e) => {
+        if (gestureActive || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        startSwipeGesture(t.clientX, t.clientY, e.target, null);
+      },
+      { passive: true }
+    );
+
+    window.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!gestureActive || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        moveSwipeGesture(t.clientX, t.clientY);
+      },
+      { passive: true }
+    );
+
+    window.addEventListener(
+      "touchend",
+      (e) => {
+        if (!gestureActive) return;
+        const t = e.changedTouches && e.changedTouches[0];
+        finishSwipeGesture(
+          t ? t.clientX : gestureCurrentX,
+          t ? t.clientY : gestureCurrentY,
+          e.target,
+          false
+        );
+      },
+      { passive: true }
+    );
 
     // Initialize Sanctuary
     window.addEventListener("resize", resizeCanvas);
